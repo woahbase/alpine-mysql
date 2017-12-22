@@ -1,0 +1,22 @@
+ARG ARCH=frommakefile
+ARG DOCKERSRC=frommakefile
+ARG USERNAME=frommakefile
+#
+FROM ${USERNAME}/${DOCKERSRC}:${ARCH}
+#
+ARG PUID=1000
+ARG PGID=1000
+#
+RUN addgroup -g ${PGID} -S mysql && \
+        adduser -u ${PUID} -G mysql -H -D mysql
+RUN set -xe \
+    && apk add --no-cache --purge -uU mysql mysql-client \
+    && rm -rf /var/cache/apk/* /tmp/*
+#
+COPY root/ /
+#
+VOLUME  ["/var/lib/mysql"]
+#
+EXPOSE 3306
+#
+ENTRYPOINT ["/init"]
