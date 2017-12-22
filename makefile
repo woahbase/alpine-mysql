@@ -77,7 +77,7 @@ rm : stop
 	docker rm -f docker_$(SVCNAME)
 
 run :
-	docker run --rm -it $(NAMEFLAGS) $(RUNFLAGS) $(PORTFLAGS) $(MOUNTFLAGS) $(OTHERFLAGS) $(IMAGETAG) $(SHCOMMAND)
+	docker run --rm -it $(NAMEFLAGS) $(RUNFLAGS) $(PORTFLAGS) $(MOUNTFLAGS) $(OTHERFLAGS) $(IMAGETAG)
 
 rshell :
 	docker exec -u root -it docker_$(SVCNAME) $(SHCOMMAND)
@@ -99,9 +99,9 @@ regbinfmt :
 	docker run --rm --privileged multiarch/qemu-user-static:register --reset
 
 backup :
-	docker exec docker_$(SERVICE_NAME) $(SCRIPTLOC) backup $(DBNAME);
+	docker exec -it docker_$(SVCNAME) $(SCRIPTLOC) backup $(DBNAME);
 
 restore :
-	docker exec -it docker_$(SERVICE_NAME) $(SCRIPTLOC) restore $(DBNAME);
+	docker exec -it docker_$(SVCNAME) $(SCRIPTLOC) restore $(DBNAME);
 
 # -- }}}
