@@ -10,7 +10,7 @@ ARG PGID=1000
 RUN addgroup -g ${PGID} -S mysql && \
         adduser -u ${PUID} -G mysql -H -D mysql
 RUN set -xe \
-    && apk add --no-cache --purge -uU mysql mysql-client \
+    && apk add --no-cache --purge -uU mysql mysql-client mariadb-server-utils mariadb-mytop \
     && rm -rf /var/cache/apk/* /tmp/*
 #
 COPY root/ /
