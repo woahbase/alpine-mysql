@@ -39,7 +39,7 @@ BUILDFLAGS := --rm --force-rm --compress -f $(CURDIR)/Dockerfile_$(ARCH) -t $(IM
 	--label org.label-schema.vendor=$(USERNAME)
 
 CACHEFLAGS := --no-cache=true --pull
-MOUNTFLAGS := -v $(CURDIR)/data:/var/lib/mysql # -v $(CURDIR)/initdb.d:/etc/mysql/initdb.d
+MOUNTFLAGS := -v $(CURDIR)/data:/var/lib/mysql# -v $(CURDIR)/initdb.d:/etc/mysql/initdb.d
 NAMEFLAGS  := --name docker_$(CNTNAME) --hostname $(CNTNAME)
 OTHERFLAGS := -v /etc/hosts:/etc/hosts:ro -v /etc/localtime:/etc/localtime:ro # -e TZ=Asia/Kolkata
 PORTFLAGS  := -p 3306:3306
