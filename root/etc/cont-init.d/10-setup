@@ -2,8 +2,8 @@
 
 # parameters
 MYSQL_ROOT_PWD=${MYSQL_ROOT_PWD:-"mysqlrootpassword"}
-MYSQL_USER=${MYSQL_USER:-"mysql"}
-MYSQL_USER_PWD=${MYSQL_USER_PWD:-"mysqlpassword"}
+MYSQL_USER=${MYSQL_USER}
+MYSQL_USER_PWD=${MYSQL_USER_PWD}
 MYSQL_USER_DB=${MYSQL_USER_DB:-"test"}
 
 if [ ! -d "/run/mysqld" ]; then

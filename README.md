@@ -62,7 +62,7 @@ to run in non-root mode. That way you only need to specify the
 values at runtime and pass the `-u mysql` if need be. (run `id`
 in your terminal to see your own `PUID`/`PGID` values.)
 
-Configurations are located at `/etc/mysql` and the data at
+Configurations are located at `/etc/my.cnf`, `/etc/my.cnf.d/*` and the data at
 `/var/lib/mysql`. The default `my.cnf` is provided, replace the
 file or rebind the whole directory with your configs. Otherwise
 the environment variables `MYSQL_ROOT_PWD` `MYSQL_USER`
