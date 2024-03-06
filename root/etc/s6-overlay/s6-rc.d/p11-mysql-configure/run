@@ -1,0 +1,133 @@
+#!/usr/bin/with-contenv bash
+set -eo pipefail
+shopt -s nullglob
+
+if [ -n "${MYSQL_SKIP_INITIALIZE}" ]; then return 0; fi;
+# else init database only if system db does not exist
+
+# initialization parameters
+MYSQL_DATABASE="${MYSQL_DATABASE:-test}"; # only created during initializing, not after
+MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"; # not localhost as it implies via unix_socket
+MYSQL_ROOT_PWD="${MYSQL_ROOT_PWD:-insecurebydefault}";
+MYSQL_USER="${MYSQL_USER:-mysql}";
+MYSQL_USER_PWD="${MYSQL_USER_PWD:-insecurebydefault}";
+
+if [ ! -d "/var/lib/mysql/mysql" ];
+then
+    echo "[i] Database system directory not found, initializing..."
+    # mysql_install_db --user=mysql > /dev/null; # previously
+    mysql_install_db \
+        --auth-root-authentication-method=normal \
+        --datadir="/var/lib/mysql" \
+        --default-time-zone=SYSTEM \
+        --enforce-storage-engine= \
+        --expire-logs-days=0 \
+        --loose-innodb_buffer_pool_dump_at_shutdown=0 \
+        --loose-innodb_buffer_pool_load_at_startup=0 \
+        --old-mode='UTF8_IS_UTF8MB3' \
+        --rpm \
+        --skip-log-bin \
+        --skip-test-db \
+        --user="${S6_USER:-alpine}" \
+        ;
+    echo '[i] Database initialized.'
+
+    if [ -n "${MYSQL_SKIP_BOOTSTRAP}" ]; then return 0; fi;
+    # else bootstrap with initial users
+
+    # create temp file to hold bootstrap sql,
+    # if file is provided then use that one instead,
+    # ----
+    # WARNING : this file is deleted after execution as it
+    # contains sensitive information. Not a problem for
+    # tempfile or generated configurator script (e.g with kube
+    # or nomad) files, but otherwise you may want to use a copy.
+    # ----
+    bfile="${MYSQL_BOOTSTRAP_FILE:-`mktemp`}";
+    echo "[i] Bootstrapping from file: $bfile";
+
+    if [ ! -s "$bfile" ];
+    then
+        echo 'USE mysql;' > $bfile; # flushes file
+        mysql_tzinfo_to_sql --skip-write-binlog /usr/share/zoneinfo >> $bfile; # requires tzdata
+        cat <<-EOSQL >> $bfile
+-- -- --
+-- dont cleanup all users, causes problems e.g. with definers
+-- DELETE FROM mysql.user;
+-- instead remove only the ones we will re-create
+FLUSH PRIVILEGES;
+EOSQL
+
+        if [ -z "${MYSQL_SKIP_ROOT_USER}" ] && [ -n "${MYSQL_ROOT_PWD}" ];
+        then
+            cat <<-EOSQL >> $bfile
+-- -- --
+-- re-create root user
+DROP USER IF EXISTS root@'127.0.0.1', root@'::1', root@'${MYSQL_HOST}';
+EXECUTE IMMEDIATE CONCAT('DROP USER IF EXISTS root@\'', @@hostname,'\'');
+GRANT ALL ON *.* TO root@'${MYSQL_HOST}' IDENTIFIED BY '${MYSQL_ROOT_PWD}' WITH GRANT OPTION;
+GRANT ALL ON *.* TO root@'%' IDENTIFIED BY '${MYSQL_ROOT_PWD}' WITH GRANT OPTION;
+SET PASSWORD FOR root@'localhost'= PASSWORD('${MYSQL_ROOT_PWD}');
+FLUSH PRIVILEGES;
+EOSQL
+
+#             if [ "${MYSQL_HOST}" != "localhost" ] \
+#             && [ "${MYSQL_HOST}" != "127.0.0.1" ];
+#             then
+#                 cat <<-EOSQL >> $bfile
+# GRANT PROXY ON ''@'%' TO root@'${MYSQL_HOST}' WITH GRANT OPTION;
+# EOSQL
+#             fi;
+        fi;
+
+        if [ -z "${MYSQL_SKIP_USER}" ] && [ -n "${MYSQL_USER}" ] && [ -n "${MYSQL_USER_PWD}" ];
+        then
+            cat <<-EOSQL >> $bfile
+-- -- --
+-- re-create non-root administrator user (mysql)
+DROP USER IF EXISTS ${MYSQL_USER}@'127.0.0.1', ${MYSQL_USER}@'::1', ${MYSQL_USER}@'${MYSQL_HOST}';
+EXECUTE IMMEDIATE CONCAT('DROP USER IF EXISTS ${MYSQL_USER}@\'', @@hostname,'\'');
+GRANT ${MYSQL_USER_GRANTS:-ALL} ON *.* TO ${MYSQL_USER}@'${MYSQL_HOST}' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
+GRANT ${MYSQL_USER_GRANTS:-ALL} ON *.* TO ${MYSQL_USER}@'%' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+EOSQL
+
+#             if [ "${MYSQL_HOST}" != "localhost" ] \
+#             && [ "${MYSQL_HOST}" != "127.0.0.1" ];
+#             then
+#                 cat <<-EOSQL >> $bfile
+# GRANT PROXY ON ''@'%' TO '${MYSQL_USER}'@'${MYSQL_HOST}' WITH GRANT OPTION;
+# EOSQL
+#             fi;
+        fi;
+
+        if [ -z "${MYSQL_SKIP_SOCKET_USER}" ]; # we use socket user for healthcheck (in /scripts/run.sh)
+        then
+            cat <<-EOSQL >> $bfile
+-- -- --
+-- create localhost socket user, has to be same as
+-- S6_USER for correct perms on /run/mysqld/mysqld.sock
+CREATE USER ${S6_USER}@localhost IDENTIFIED VIA unix_socket;
+-- for socket admin set grants to 'ALL'
+GRANT ${MYSQL_SOCKET_USER_GRANTS:-USAGE} ON *.* TO ${S6_USER}@localhost;
+FLUSH PRIVILEGES;
+EOSQL
+        fi;
+
+        if [ -z "${MYSQL_SKIP_CREATE_DB}" ] \
+        && [ -n "${MYSQL_DATABASE}" ];
+        then
+            cat <<-EOSQL >> $bfile
+-- -- --
+-- create database
+CREATE DATABASE IF NOT EXISTS $MYSQL_DATABASE CHARACTER SET ${MYSQL_DATABASE_CHARSET:-utf8} COLLATE ${MYSQL_DATABASE_COLLATE:-utf8_general_ci};
+EOSQL
+        fi;
+    fi;
+    /usr/bin/mysqld --user="${S6_USER:-alpine}" --bootstrap --verbose=0 < $bfile;
+    if [ -z "${MYSQL_KEEP_BOOTSTRAP_FILE}" ]; then rm -f $bfile; fi;
+    echo "[i] Completed bootstrap.";
+fi;
+
+echo "[i] Sleeping 1 sec before starting service...";
+sleep 1;

@@ -1,0 +1,35 @@
+#!/usr/bin/with-contenv bash
+set -e
+
+# ensure my.cnf exists
+if [ ! -f /etc/my.cnf ];
+then
+    cp /defaults/my.cnf /etc/my.cnf;
+fi;
+
+# ensure my.cnf.d exists
+if [ ! -d "/etc/my.cnf.d" ] \
+&& [ -z "${MYSQL_SKIP_MYCNFD}" ]; # set to true if all you settings are in my.cnf
+then
+    cp -r /defaults/my.cnf.d /etc/; # drop default snippets
+else
+    mkdir -p /etc/my.cnf.d; # only make sure dir exists
+fi;
+
+mkdir -p \
+    /var/lib/mysql \
+    /run/mysqld \
+    ;
+
+# fix permissions
+chown \
+    ${S6_USER:-alpine}:${S6_USER:-alpine} \
+    /etc/my.cnf \
+    ;
+
+chown -R \
+    ${S6_USER:-alpine}:${S6_USER:-alpine} \
+    /etc/my.cnf.d \
+    /run/mysqld \
+    /var/lib/mysql \
+    ;

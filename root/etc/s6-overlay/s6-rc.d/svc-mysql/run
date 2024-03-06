@@ -1,0 +1,8 @@
+#!/usr/bin/with-contenv bash
+set -e
+
+MYSQL_EXECUTABLE="${MYSQL_EXECUTABLE:-/usr/bin/mysqld}";
+MYSQL_ARGS="${MYSQL_ARGS:- --user=$S6_USER --console }";
+
+exec \
+    ${MYSQL_EXECUTABLE} ${MYSQL_ARGS}
