@@ -33,23 +33,21 @@ then
     for f in ${MYSQL_INIT_DB}/*; do
         process_init_file "$f" /usr/bin/mysql -u root -p"${MYSQL_ROOT_PWD}";
     done;
-elif [ ${CMD^^} == 'BACKUP'  ];
+elif [ ${CMD^^} == 'BACKUP'  ]; # runs as root by default, recommended to run as $S6_USER (mysql)
 then
-    s6-setuidgid ${S6_USER:-mysql} \
     mysqldump \
         ${MYSQL_HOST:+ --host=$MYSQL_HOST} \
         --user="${MYSQL_USER}" \
         --password="${MYSQL_USER_PWD}" \
         --databases "${DB}" > ${MYSQL_BACKUPDIR}/${DB}.sql;
-elif [ ${CMD^^} == 'RESTORE'  ];
+elif [ ${CMD^^} == 'RESTORE'  ]; # runs as root by default, recommended to run as $S6_USER (mysql)
 then
-    s6-setuidgid ${S6_USER:-mysql} \
     mysql \
         ${MYSQL_HOST:+ --host=$MYSQL_HOST} \
         --user="${MYSQL_USER}" \
         --password="${MYSQL_USER_PWD}" \
         --one-database "${DB}" < ${MYSQL_BACKUPDIR}/${DB}.sql;
-elif [ ${CMD^^} == 'HEALTHCHECK'  ];
+elif [ ${CMD^^} == 'HEALTHCHECK'  ]; # runs as non-root user by default
 then
     if [ -n "${MYSQL_HEALTHCHECK_USER:-$MYSQL_USER}" ] && [ -n "${MYSQL_HEALTHCHECK_USER_PWD:-$MYSQL_USER_PWD}" ];
     then
