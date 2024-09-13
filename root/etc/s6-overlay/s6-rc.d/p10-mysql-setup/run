@@ -1,9 +1,21 @@
 #!/usr/bin/with-contenv bash
 set -e
 
+vecho () { if [ "${S6_VERBOSITY:-1}" -gt 0 ]; then echo "[$0] $@"; fi; }
+
+MYSQL_BACKUPDIR="${MYSQL_BACKUPDIR:-/var/lib/mysql_backups}"; # only created during initializing, not after
+
+vecho "Ensure configuration directories exist.";
+mkdir -p \
+    /var/lib/mysql \
+    ${MYSQL_BACKUPDIR} \
+    /run/mysqld \
+    ;
+
 # ensure my.cnf exists
 if [ ! -f /etc/my.cnf ];
 then
+    vecho "Setting up default configurations at /etc/my.cnf.";
     cp /defaults/my.cnf /etc/my.cnf;
 fi;
 
@@ -11,25 +23,25 @@ fi;
 if [ ! -d "/etc/my.cnf.d" ] \
 && [ -z "${MYSQL_SKIP_MYCNFD}" ]; # set to true if all you settings are in my.cnf
 then
+    vecho "Setting up default config-snippet dir at /etc/my.cnf.d";
     cp -r /defaults/my.cnf.d /etc/; # drop default snippets
 else
+    vecho "Ensure default config-snippet dir at /etc/my.cnf.d exists.";
     mkdir -p /etc/my.cnf.d; # only make sure dir exists
 fi;
 
-mkdir -p \
-    /var/lib/mysql \
-    /run/mysqld \
-    ;
-
 # fix permissions
-chown \
-    ${S6_USER:-alpine}:${S6_USER:-alpine} \
-    /etc/my.cnf \
-    ;
-
+vecho "Fixing permissions.";
 chown -R \
-    ${S6_USER:-alpine}:${S6_USER:-alpine} \
+    ${S6_USER:-mysql}:${S6_USER:-mysql} \
+    /etc/my.cnf \
     /etc/my.cnf.d \
     /run/mysqld \
-    /var/lib/mysql \
+    ${MYSQL_BACKUPDIR} \
     ;
+
+find /var/lib/mysql \
+    \! -user ${S6_USER:-mysql} -exec \
+    chown --no-dereference \
+    ${S6_USER:-mysql}:${S6_USER:-mysql} \
+    '{}' +;

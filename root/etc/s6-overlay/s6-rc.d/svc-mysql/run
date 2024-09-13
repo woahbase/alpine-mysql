@@ -5,4 +5,6 @@ MYSQL_EXECUTABLE="${MYSQL_EXECUTABLE:-/usr/bin/mysqld}";
 MYSQL_ARGS="${MYSQL_ARGS:- --user=$S6_USER --console }";
 
 exec \
-    ${MYSQL_EXECUTABLE} ${MYSQL_ARGS}
+    ${MYSQL_EXECUTABLE} \
+    ${MYSQL_ARGS} \
+    ;

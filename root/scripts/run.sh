@@ -6,6 +6,7 @@ CMD="$1";
 DB="$2"; # optional
 
 MYSQL_INIT_DB=${MYSQL_INIT_DB:-/etc/my.initdb.d}
+MYSQL_BACKUPDIR="${MYSQL_BACKUPDIR:-/var/lib/mysql_backups}";
 
 # from https://github.com/docker-library/mysql/blob/master/8.0/docker-entrypoint.sh
 # usage: process_init_file FILENAME MYSQLCOMMAND...
@@ -34,23 +35,35 @@ then
     done;
 elif [ ${CMD^^} == 'BACKUP'  ];
 then
-    mysqldump -u "${MYSQL_USER}" -p"${MYSQL_USER_PWD}" --databases "${DB}" > /var/lib/mysql/backups/${DB}.sql;
+    s6-setuidgid ${S6_USER:-mysql} \
+    mysqldump \
+        ${MYSQL_HOST:+ --host=$MYSQL_HOST} \
+        --user="${MYSQL_USER}" \
+        --password="${MYSQL_USER_PWD}" \
+        --databases "${DB}" > ${MYSQL_BACKUPDIR}/${DB}.sql;
 elif [ ${CMD^^} == 'RESTORE'  ];
 then
-    mysql -u "${MYSQL_USER}" -p"${MYSQL_USER_PWD}" --one-database "${DB}" < /var/lib/mysql/backups/${DB}.sql;
+    s6-setuidgid ${S6_USER:-mysql} \
+    mysql \
+        ${MYSQL_HOST:+ --host=$MYSQL_HOST} \
+        --user="${MYSQL_USER}" \
+        --password="${MYSQL_USER_PWD}" \
+        --one-database "${DB}" < ${MYSQL_BACKUPDIR}/${DB}.sql;
 elif [ ${CMD^^} == 'HEALTHCHECK'  ];
 then
     if [ -n "${MYSQL_HEALTHCHECK_USER:-$MYSQL_USER}" ] && [ -n "${MYSQL_HEALTHCHECK_USER_PWD:-$MYSQL_USER_PWD}" ];
     then
+        s6-setuidgid ${S6_USER:-mysql} \
         mysql \
             ${MYSQL_HOST:+ --host=$MYSQL_HOST} \
             --user=${MYSQL_HEALTHCHECK_USER:-$MYSQL_USER} \
             --password=${MYSQL_HEALTHCHECK_USER_PWD:-$MYSQL_USER_PWD} \
-            --execute="SHOW DATABASES;";
+            --execute="${HEALTHCHECK_QUERY:-SHOW DATABASES;}";
     else
+        s6-setuidgid ${S6_USER:-mysql} \
         mysql \
             -h localhost \
             --socket=/run/mysqld/mysqld.sock \
-            --execute="SHOW DATABASES;";
+            --execute="${HEALTHCHECK_QUERY:-SHOW DATABASES;}";
     fi;
 fi;

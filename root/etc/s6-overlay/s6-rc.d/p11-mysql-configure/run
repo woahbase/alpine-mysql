@@ -2,6 +2,8 @@
 set -eo pipefail
 shopt -s nullglob
 
+vecho () { if [ "${S6_VERBOSITY:-1}" -gt 0 ]; then echo "[$0] $@"; fi; }
+
 if [ -n "${MYSQL_SKIP_INITIALIZE}" ]; then return 0; fi;
 # else init database only if system db does not exist
 
@@ -11,10 +13,12 @@ MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"; # not localhost as it implies via unix_so
 MYSQL_ROOT_PWD="${MYSQL_ROOT_PWD:-insecurebydefault}";
 MYSQL_USER="${MYSQL_USER:-mysql}";
 MYSQL_USER_PWD="${MYSQL_USER_PWD:-insecurebydefault}";
+MYSQL_USER_GRANTS="${MYSQL_USER_GRANTS:-ALL}";
+MYSQL_SOCKET_USER_GRANTS="${MYSQL_SOCKET_USER_GRANTS:-USAGE}";
 
 if [ ! -d "/var/lib/mysql/mysql" ];
 then
-    echo "[i] Database system directory not found, initializing..."
+    vecho "Database system directory not found, initializing..."
     # mysql_install_db --user=mysql > /dev/null; # previously
     mysql_install_db \
         --auth-root-authentication-method=normal \
@@ -28,9 +32,9 @@ then
         --rpm \
         --skip-log-bin \
         --skip-test-db \
-        --user="${S6_USER:-alpine}" \
+        --user="${S6_USER:-mysql}" \
         ;
-    echo '[i] Database initialized.'
+    vecho 'Database initialized.'
 
     if [ -n "${MYSQL_SKIP_BOOTSTRAP}" ]; then return 0; fi;
     # else bootstrap with initial users
@@ -44,10 +48,11 @@ then
     # or nomad) files, but otherwise you may want to use a copy.
     # ----
     bfile="${MYSQL_BOOTSTRAP_FILE:-`mktemp`}";
-    echo "[i] Bootstrapping from file: $bfile";
+    vecho "Bootstrapping from file: $bfile";
 
     if [ ! -s "$bfile" ];
     then
+        vecho "Generating bootstrap file: $bfile";
         echo 'USE mysql;' > $bfile; # flushes file
         mysql_tzinfo_to_sql --skip-write-binlog /usr/share/zoneinfo >> $bfile; # requires tzdata
         cat <<-EOSQL >> $bfile
@@ -60,6 +65,7 @@ EOSQL
 
         if [ -z "${MYSQL_SKIP_ROOT_USER}" ] && [ -n "${MYSQL_ROOT_PWD}" ];
         then
+            vecho "Ensure root user exists.";
             cat <<-EOSQL >> $bfile
 -- -- --
 -- re-create root user
@@ -82,13 +88,14 @@ EOSQL
 
         if [ -z "${MYSQL_SKIP_USER}" ] && [ -n "${MYSQL_USER}" ] && [ -n "${MYSQL_USER_PWD}" ];
         then
+            vecho "Ensure non-root user exists: ${MYSQL_USER}";
             cat <<-EOSQL >> $bfile
 -- -- --
--- re-create non-root administrator user (mysql)
+-- re-create non-root administrator user (mysql) for remote access
 DROP USER IF EXISTS ${MYSQL_USER}@'127.0.0.1', ${MYSQL_USER}@'::1', ${MYSQL_USER}@'${MYSQL_HOST}';
 EXECUTE IMMEDIATE CONCAT('DROP USER IF EXISTS ${MYSQL_USER}@\'', @@hostname,'\'');
-GRANT ${MYSQL_USER_GRANTS:-ALL} ON *.* TO ${MYSQL_USER}@'${MYSQL_HOST}' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
-GRANT ${MYSQL_USER_GRANTS:-ALL} ON *.* TO ${MYSQL_USER}@'%' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
+GRANT ${MYSQL_USER_GRANTS} ON *.* TO ${MYSQL_USER}@'${MYSQL_HOST}' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
+GRANT ${MYSQL_USER_GRANTS} ON *.* TO ${MYSQL_USER}@'%' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 EOSQL
 
@@ -103,13 +110,14 @@ EOSQL
 
         if [ -z "${MYSQL_SKIP_SOCKET_USER}" ]; # we use socket user for healthcheck (in /scripts/run.sh)
         then
+            vecho "Ensure socket user exists: ${S6_USER}";
             cat <<-EOSQL >> $bfile
 -- -- --
 -- create localhost socket user, has to be same as
 -- S6_USER for correct perms on /run/mysqld/mysqld.sock
 CREATE USER ${S6_USER}@localhost IDENTIFIED VIA unix_socket;
 -- for socket admin set grants to 'ALL'
-GRANT ${MYSQL_SOCKET_USER_GRANTS:-USAGE} ON *.* TO ${S6_USER}@localhost;
+GRANT ${MYSQL_SOCKET_USER_GRANTS} ON *.* TO ${S6_USER}@localhost;
 FLUSH PRIVILEGES;
 EOSQL
         fi;
@@ -117,17 +125,22 @@ EOSQL
         if [ -z "${MYSQL_SKIP_CREATE_DB}" ] \
         && [ -n "${MYSQL_DATABASE}" ];
         then
+            vecho "Ensure default DB exists: ${MYSQL_DATABASE}";
             cat <<-EOSQL >> $bfile
 -- -- --
 -- create database
-CREATE DATABASE IF NOT EXISTS $MYSQL_DATABASE CHARACTER SET ${MYSQL_DATABASE_CHARSET:-utf8} COLLATE ${MYSQL_DATABASE_COLLATE:-utf8_general_ci};
+CREATE DATABASE IF NOT EXISTS ${MYSQL_DATABASE} CHARACTER SET ${MYSQL_DATABASE_CHARSET:-utf8} COLLATE ${MYSQL_DATABASE_COLLATE:-utf8_general_ci};
 EOSQL
         fi;
     fi;
-    /usr/bin/mysqld --user="${S6_USER:-alpine}" --bootstrap --verbose=0 < $bfile;
-    if [ -z "${MYSQL_KEEP_BOOTSTRAP_FILE}" ]; then rm -f $bfile; fi;
-    echo "[i] Completed bootstrap.";
+    /usr/bin/mysqld --user="${S6_USER:-mysql}" --bootstrap --verbose=0 < $bfile;
+    if [ -z "${MYSQL_KEEP_BOOTSTRAP_FILE}" ];
+    then
+        vecho "Removing bootstrap file: $bfile";
+        rm -f $bfile;
+    fi;
+    vecho "Completed bootstrap.";
 fi;
 
-echo "[i] Sleeping 1 sec before starting service...";
+vecho "Sleeping 1 sec before starting service...";
 sleep 1;

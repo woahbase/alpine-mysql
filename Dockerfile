@@ -9,22 +9,27 @@ RUN set -xe \
         mysql \
         mysql-client \
         mariadb \
-        mariadb-client \
         mariadb-backup \
-        mariadb-server-utils \
+        mariadb-client \
         mariadb-mytop \
+        mariadb-plugin-rocksdb \
+        mariadb-server-utils \
         tzdata \
+    # remove default user alpine as it seems clash with user mysql
+    # e.g claims mysql socket and fail healthcheck via socket
+    && userdel -rf alpine \
     && mkdir -p /defaults \
     && mv /etc/my.cnf /defaults/my.cnf.default \
     && mv /etc/my.cnf.d /defaults/my.cnf.d.default \
     && rm -rf /var/cache/apk/* /tmp/*
 #
-ENV S6_USER=mysql \
+ENV \
+    S6_USER=mysql \
     S6_USERHOME=/var/lib/mysql
 #
 COPY root/ /
 #
-VOLUME  ["/var/lib/mysql", "/etc/my.cnf.d"]
+VOLUME  ["/var/lib/mysql", "/var/lib/mysql_backups", "/etc/my.cnf.d", "/etc/my.initdb.d"]
 #
 EXPOSE 3306 3366
 #
