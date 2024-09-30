@@ -82,7 +82,7 @@ SCRIPTLOC  := /scripts/run.sh
 DBNAME     := test
 MOUNTFLAGS := \
 	# -v $(CURDIR)/data:/var/lib/mysql \
-	#  -v $(CURDIR)/initdb.d:/etc/my.initdb.d \
+	# -v $(CURDIR)/initdb.d:/etc/my.initdb.d \
 	# -v /etc/hosts:/etc/hosts:ro \
 	# -v /etc/localtime:/etc/localtime:ro \
 	#
@@ -110,6 +110,8 @@ OTHERFLAGS := \
 	# -e MYSQL_HEALTHCHECK_USER=mysqlhc \
 	# -e MYSQL_HEALTHCHECK_USER_PWD=insecurebydefaulthc \
 	# -e MYSQL_KEEP_BOOTSTRAP_FILE=1 \
+	# -e MYSQL_SKIP_INITIALIZE=true \
+	# -e MYSQL_SKIP_BOOTSTRAP=true \
 	# -e TZ=Asia/Kolkata \
 	#
 # all runtime flags combined here

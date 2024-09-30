@@ -4,7 +4,7 @@ shopt -s nullglob
 
 vecho () { if [ "${S6_VERBOSITY:-1}" -gt 0 ]; then echo "[$0] $@"; fi; }
 
-if [ -n "${MYSQL_SKIP_INITIALIZE}" ]; then return 0; fi;
+if [ -n "${MYSQL_SKIP_INITIALIZE}" ]; then exit 0; fi;
 # else init database only if system db does not exist
 
 # initialization parameters
@@ -36,7 +36,7 @@ then
         ;
     vecho 'Database initialized.'
 
-    if [ -n "${MYSQL_SKIP_BOOTSTRAP}" ]; then return 0; fi;
+    if [ -n "${MYSQL_SKIP_BOOTSTRAP}" ]; then exit 0; fi;
     # else bootstrap with initial users
 
     # create temp file to hold bootstrap sql,
