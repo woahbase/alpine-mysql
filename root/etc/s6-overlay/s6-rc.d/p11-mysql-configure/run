@@ -8,37 +8,34 @@ if [ -n "${MYSQL_SKIP_INITIALIZE}" ]; then exit 0; fi;
 # else init database only if system db does not exist
 
 # initialization parameters
-MYSQL_DATABASE="${MYSQL_DATABASE:-test}"; # only created during initializing, not after
+MYSQL_HOME="${MYSQL_HOME:-/var/lib/mysql}";
 MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"; # not localhost as it implies via unix_socket
-MYSQL_ROOT_PWD="${MYSQL_ROOT_PWD:-insecurebydefault}";
-MYSQL_USER="${MYSQL_USER:-mysql}";
-MYSQL_USER_PWD="${MYSQL_USER_PWD:-insecurebydefault}";
+# MYSQL_ROOT_PWD="${MYSQL_ROOT_PWD:-insecurebydefault}"; # unset by default, required for initialization
+# MYSQL_DATABASE="${MYSQL_DATABASE:-test}"; # only created during initializing, not after
+
+MYSQL_USER="${MYSQL_USER:-myadmin}";
+# MYSQL_USER_PWD="${MYSQL_USER_PWD:-insecurebydefault}"; # unset by default, optional for initialization
 MYSQL_USER_GRANTS="${MYSQL_USER_GRANTS:-ALL}";
+
+MYSQL_HEALTHCHECK_USER="${MYSQL_HEALTHCHECK_USER:-myhcuser}";
+# MYSQL_HEALTHCHECK_USER_PWD="${MYSQL_HEALTHCHECK_USER_PWD:-insecurebydefault}"; # unset by default, optional for initialization
+MYSQL_HEALTHCHECK_USER_GRANTS="${MYSQL_HEALTHCHECK_USER_GRANTS:-USAGE}";
+
+# MYSQL_REPLICA_MASTER="${MYSQL_REPLICA_MASTER:-master.my.service.local}"; # unset by default, used to determine if master or slave
+MYSQL_REPLICA_PORT="${MYSQL_REPLICA_PORT:-${MYSQL_PORT}}"; # unset by default, used to determine if master or slave
+MYSQL_REPLICA_USER="${MYSQL_REPLICA_USER:-myreplica}";
+# MYSQL_REPLICA_USER_PWD="${MYSQL_REPLICA_USER_PWD:-insecurebydefault}"; # unset by default, optional for initialization
+MYSQL_REPLICA_RETRY="${MYSQL_REPLICA_RETRY:-10}";
+
+MYSQL_SOCKET_PATH="${MYSQL_SOCKET_PATH:-/run/mysqld/mysqld.sock}";
 MYSQL_SOCKET_USER_GRANTS="${MYSQL_SOCKET_USER_GRANTS:-USAGE}";
 
-if [ ! -d "/var/lib/mysql/mysql" ];
-then
-    vecho "Database system directory not found, initializing..."
-    # mysql_install_db --user=mysql > /dev/null; # previously
-    mysql_install_db \
-        --auth-root-authentication-method=normal \
-        --datadir="/var/lib/mysql" \
-        --default-time-zone=SYSTEM \
-        --enforce-storage-engine= \
-        --expire-logs-days=0 \
-        --loose-innodb_buffer_pool_dump_at_shutdown=0 \
-        --loose-innodb_buffer_pool_load_at_startup=0 \
-        --old-mode='UTF8_IS_UTF8MB3' \
-        --rpm \
-        --skip-log-bin \
-        --skip-test-db \
-        --user="${S6_USER:-mysql}" \
-        ;
-    vecho 'Database initialized.'
+# default args for mysql process sql
+MYSQL_PROCESS_ARGS="${MYSQL_PROCESS_ARGS:- --protocol=socket -uroot -hlocalhost --comments --socket=${MYSQL_SOCKET_PATH}}";
 
-    if [ -n "${MYSQL_SKIP_BOOTSTRAP}" ]; then exit 0; fi;
-    # else bootstrap with initial users
+# all mysql/mariadb commands are run as ${S6_USER:-mysql}
 
+loadBootstrapFile () {
     # create temp file to hold bootstrap sql,
     # if file is provided then use that one instead,
     # ----
@@ -48,98 +45,234 @@ then
     # or nomad) files, but otherwise you may want to use a copy.
     # ----
     bfile="${MYSQL_BOOTSTRAP_FILE:-`mktemp`}";
-    vecho "Bootstrapping from file: $bfile";
+    vecho "Bootstrapping from file: ${bfile}";
 
-    if [ ! -s "$bfile" ];
+    if [ ! -s "${bfile}" ];
     then
-        vecho "Generating bootstrap file: $bfile";
-        echo 'USE mysql;' > $bfile; # flushes file
-        mysql_tzinfo_to_sql --skip-write-binlog /usr/share/zoneinfo >> $bfile; # requires tzdata
-        cat <<-EOSQL >> $bfile
--- -- --
--- dont cleanup all users, causes problems e.g. with definers
--- DELETE FROM mysql.user;
--- instead remove only the ones we will re-create
-FLUSH PRIVILEGES;
+        vecho "Generating bootstrap file: ${bfile}";
+        echo 'USE mysql;' > "${bfile}"; # flushes file
+
+        if [ -z "${MYSQL_INITDB_SKIP_TZINFO}" ];
+        then # load tzinfo
+            # sed is for https://bugs.mysql.com/bug.php?id=20545
+            s6-setuidgid ${S6_USER:-mysql} \
+                mariadb-tzinfo-to-sql \
+                    --skip-write-binlog \
+                    /usr/share/zoneinfo \
+                | sed 's/Local time zone must be set--see zic manual page/FCTY/' \
+                >> "${bfile}"; # requires tzdata
+        fi;
+
+        cat <<-EOSQL >> "${bfile}"
+            -- -- --
+            -- enable autocommit explicitly (in case it was disabled globally)
+            SET autocommit = 1;
+
+            -- Securing system users shouldn't be replicated
+            SET @orig_sql_log_bin= @@SESSION.SQL_LOG_BIN;
+            SET @@SESSION.SQL_LOG_BIN=0;
+
+            -- we need the SQL_MODE NO_BACKSLASH_ESCAPES mode to be clear for the password to be set
+            SET @@SESSION.SQL_MODE=REPLACE(@@SESSION.SQL_MODE, 'NO_BACKSLASH_ESCAPES', '');
+
+            -- -- --
+            -- dont cleanup all users, causes problems e.g. with definers
+            -- DELETE FROM mysql.user;
+            -- instead remove only the ones we will re-create
+            FLUSH PRIVILEGES;
 EOSQL
 
         if [ -z "${MYSQL_SKIP_ROOT_USER}" ] && [ -n "${MYSQL_ROOT_PWD}" ];
         then
             vecho "Ensure root user exists.";
-            cat <<-EOSQL >> $bfile
--- -- --
--- re-create root user
-DROP USER IF EXISTS root@'127.0.0.1', root@'::1', root@'${MYSQL_HOST}';
-EXECUTE IMMEDIATE CONCAT('DROP USER IF EXISTS root@\'', @@hostname,'\'');
-GRANT ALL ON *.* TO root@'${MYSQL_HOST}' IDENTIFIED BY '${MYSQL_ROOT_PWD}' WITH GRANT OPTION;
-GRANT ALL ON *.* TO root@'%' IDENTIFIED BY '${MYSQL_ROOT_PWD}' WITH GRANT OPTION;
-SET PASSWORD FOR root@'localhost'= PASSWORD('${MYSQL_ROOT_PWD}');
-FLUSH PRIVILEGES;
+            cat <<-EOSQL >> "${bfile}"
+                -- -- --
+                -- re-create root user
+                DROP USER IF EXISTS 'root'@'127.0.0.1', 'root'@'::1', 'root'@'${MYSQL_HOST}';
+                EXECUTE IMMEDIATE CONCAT('DROP USER IF EXISTS root@\'', @@hostname,'\'');
+                GRANT ALL ON *.* TO 'root'@'${MYSQL_HOST}' IDENTIFIED BY '${MYSQL_ROOT_PWD}' WITH GRANT OPTION;
+                GRANT ALL ON *.* TO 'root'@'%' IDENTIFIED BY '${MYSQL_ROOT_PWD}' WITH GRANT OPTION;
+                SET PASSWORD FOR 'root'@'localhost'= PASSWORD('${MYSQL_ROOT_PWD}');
+                GRANT PROXY ON ''@'%' TO root@'${MYSQL_HOST}' WITH GRANT OPTION;
+                FLUSH PRIVILEGES;
 EOSQL
-
-#             if [ "${MYSQL_HOST}" != "localhost" ] \
-#             && [ "${MYSQL_HOST}" != "127.0.0.1" ];
-#             then
-#                 cat <<-EOSQL >> $bfile
-# GRANT PROXY ON ''@'%' TO root@'${MYSQL_HOST}' WITH GRANT OPTION;
-# EOSQL
-#             fi;
         fi;
 
         if [ -z "${MYSQL_SKIP_USER}" ] && [ -n "${MYSQL_USER}" ] && [ -n "${MYSQL_USER_PWD}" ];
         then
-            vecho "Ensure non-root user exists: ${MYSQL_USER}";
-            cat <<-EOSQL >> $bfile
--- -- --
--- re-create non-root administrator user (mysql) for remote access
-DROP USER IF EXISTS ${MYSQL_USER}@'127.0.0.1', ${MYSQL_USER}@'::1', ${MYSQL_USER}@'${MYSQL_HOST}';
-EXECUTE IMMEDIATE CONCAT('DROP USER IF EXISTS ${MYSQL_USER}@\'', @@hostname,'\'');
-GRANT ${MYSQL_USER_GRANTS} ON *.* TO ${MYSQL_USER}@'${MYSQL_HOST}' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
-GRANT ${MYSQL_USER_GRANTS} ON *.* TO ${MYSQL_USER}@'%' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
-FLUSH PRIVILEGES;
+            vecho "Ensure non-root administrator user exists: ${MYSQL_USER}";
+            cat <<-EOSQL >> "${bfile}"
+                -- -- --
+                -- re-create non-root administrator user for remote access
+                DROP USER IF EXISTS '${MYSQL_USER}'@'127.0.0.1', '${MYSQL_USER}'@'::1', '${MYSQL_USER}'@'${MYSQL_HOST}';
+                EXECUTE IMMEDIATE CONCAT('DROP USER IF EXISTS ${MYSQL_USER}@\'', @@hostname,'\'');
+                GRANT ${MYSQL_USER_GRANTS} ON *.* TO '${MYSQL_USER}'@'${MYSQL_HOST}' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
+                GRANT ${MYSQL_USER_GRANTS} ON *.* TO '${MYSQL_USER}'@'%' IDENTIFIED BY '${MYSQL_USER_PWD}' WITH GRANT OPTION;
+                GRANT PROXY ON ''@'%' TO '${MYSQL_USER}'@'${MYSQL_HOST}' WITH GRANT OPTION;
+                FLUSH PRIVILEGES;
 EOSQL
-
-#             if [ "${MYSQL_HOST}" != "localhost" ] \
-#             && [ "${MYSQL_HOST}" != "127.0.0.1" ];
-#             then
-#                 cat <<-EOSQL >> $bfile
-# GRANT PROXY ON ''@'%' TO '${MYSQL_USER}'@'${MYSQL_HOST}' WITH GRANT OPTION;
-# EOSQL
-#             fi;
         fi;
 
-        if [ -z "${MYSQL_SKIP_SOCKET_USER}" ]; # we use socket user for healthcheck (in /scripts/run.sh)
+        if [ -z "${MYSQL_SKIP_HEALTHCHECK_USER}" ] && [ -n "${MYSQL_HEALTHCHECK_USER}" ] && [ -n "${MYSQL_HEALTHCHECK_USER_PWD}" ];
+        then
+            vecho "Ensure healthcheck user exists: ${MYSQL_HEALTHCHECK_USER}";
+            cat <<-EOSQL >> "${bfile}"
+                -- -- --
+                -- create healthcheck user
+                CREATE USER '${MYSQL_HEALTHCHECK_USER}'@'127.0.0.1' IDENTIFIED BY '${MYSQL_HEALTHCHECK_USER_PWD}';
+                SET PASSWORD FOR '${MYSQL_HEALTHCHECK_USER}'@'127.0.0.1' = PASSWORD('${MYSQL_HEALTHCHECK_USER_PWD}');
+                GRANT ${MYSQL_HEALTHCHECK_USER_GRANTS} ON *.* TO '${MYSQL_HEALTHCHECK_USER}'@'127.0.0.1';
+                --
+                CREATE USER '${MYSQL_HEALTHCHECK_USER}'@'::1' IDENTIFIED BY '${MYSQL_HEALTHCHECK_USER_PWD}';
+                SET PASSWORD FOR '${MYSQL_HEALTHCHECK_USER}'@'::1' = PASSWORD('${MYSQL_HEALTHCHECK_USER_PWD}');
+                GRANT ${MYSQL_HEALTHCHECK_USER_GRANTS} ON *.* TO '${MYSQL_HEALTHCHECK_USER}'@'::1';
+                --
+                CREATE USER '${MYSQL_HEALTHCHECK_USER}'@'localhost' IDENTIFIED BY '${MYSQL_HEALTHCHECK_USER_PWD}';
+                SET PASSWORD FOR '${MYSQL_HEALTHCHECK_USER}'@'localhost' = PASSWORD('${MYSQL_HEALTHCHECK_USER_PWD}');
+                GRANT ${MYSQL_HEALTHCHECK_USER_GRANTS} ON *.* TO '${MYSQL_HEALTHCHECK_USER}'@'localhost';
+                FLUSH PRIVILEGES;
+EOSQL
+        fi;
+
+        if [ -z "${MYSQL_SKIP_REPLICA_USER}" ] && [ -n "${MYSQL_REPLICA_USER}" ] && [ -n "${MYSQL_REPLICA_USER_PWD}" ];
+        then
+            if [ -z "${MYSQL_REPLICA_MASTER}" ];
+            then
+                vecho "Ensure replication user exists: ${MYSQL_REPLICA_USER}";
+                cat <<-EOSQL >> "${bfile}"
+                    -- -- --
+                    -- create replica user for remote access
+                    CREATE USER '${MYSQL_REPLICA_USER}'@'%' IDENTIFIED BY '${MYSQL_REPLICA_USER_PWD}';
+                    GRANT REPLICATION REPLICA ON *.* TO '${MYSQL_REPLICA_USER}'@'%';
+                    FLUSH PRIVILEGES;
+EOSQL
+            else
+                vecho "Update replication master details: ${MYSQL_REPLICA_MASTER}";
+                cat <<-EOSQL >> "${bfile}"
+                    -- -- --
+                    -- update replica master details on slave
+                    CHANGE MASTER TO MASTER_HOST='${MYSQL_REPLICA_MASTER}', MASTER_USER='${MYSQL_REPLICA_USER}', MASTER_PASSWORD='${MYSQL_REPLICA_USER_PWD}', MASTER_PORT=${MYSQL_REPLICA_PORT}, MASTER_CONNECT_RETRY=${MYSQL_REPLICA_RETRY};
+EOSQL
+            fi;
+        fi;
+
+        if [ -z "${MYSQL_SKIP_SOCKET_USER}" ]; # we can also use socket user for healthcheck (in /scripts/run.sh)
         then
             vecho "Ensure socket user exists: ${S6_USER}";
-            cat <<-EOSQL >> $bfile
--- -- --
--- create localhost socket user, has to be same as
--- S6_USER for correct perms on /run/mysqld/mysqld.sock
-CREATE USER ${S6_USER}@localhost IDENTIFIED VIA unix_socket;
--- for socket admin set grants to 'ALL'
-GRANT ${MYSQL_SOCKET_USER_GRANTS} ON *.* TO ${S6_USER}@localhost;
-FLUSH PRIVILEGES;
+            cat <<-EOSQL >> "${bfile}"
+                -- -- --
+                -- create localhost socket user, has to be same as
+                -- S6_USER for correct perms on ${MYSQL_SOCKET_PATH}
+                CREATE USER ${S6_USER}@localhost IDENTIFIED VIA unix_socket;
+                -- for socket admin set grants to 'ALL'
+                GRANT ${MYSQL_SOCKET_USER_GRANTS} ON *.* TO ${S6_USER}@localhost;
+                FLUSH PRIVILEGES;
 EOSQL
         fi;
 
+        cat <<-EOSQL >> "${bfile}"
+            -- end of securing system users, rest of init now...
+            SET @@SESSION.SQL_LOG_BIN=@orig_sql_log_bin;
+EOSQL
         if [ -z "${MYSQL_SKIP_CREATE_DB}" ] \
         && [ -n "${MYSQL_DATABASE}" ];
         then
             vecho "Ensure default DB exists: ${MYSQL_DATABASE}";
-            cat <<-EOSQL >> $bfile
--- -- --
--- create database
-CREATE DATABASE IF NOT EXISTS ${MYSQL_DATABASE} CHARACTER SET ${MYSQL_DATABASE_CHARSET:-utf8} COLLATE ${MYSQL_DATABASE_COLLATE:-utf8_general_ci};
+            cat <<-EOSQL >> "${bfile}"
+                -- -- --
+                -- create database
+                CREATE DATABASE IF NOT EXISTS ${MYSQL_DATABASE} CHARACTER SET ${MYSQL_DATABASE_CHARSET:-utf8} COLLATE ${MYSQL_DATABASE_COLLATE:-utf8_general_ci};
 EOSQL
         fi;
     fi;
-    /usr/bin/mysqld --user="${S6_USER:-mysql}" --bootstrap --verbose=0 < $bfile;
+
+    vecho "Loading bootstrap file."; # without password because we're only setting it up now
+    s6-setuidgid ${S6_USER:-mysql} \
+        mariadb \
+            ${MYSQL_PROCESS_ARGS} \
+            --binary-mode \
+            < "${bfile}";
+    # immediately remove bootstrap file after we're done
+    # unless we want to preserve it
     if [ -z "${MYSQL_KEEP_BOOTSTRAP_FILE}" ];
     then
-        vecho "Removing bootstrap file: $bfile";
-        rm -f $bfile;
+        vecho "Removing bootstrap file: ${bfile}";
+        shred -fz "${bfile}";
+        rm -f "${bfile}";
+    fi
+}
+
+DATABASE_ALREADY_EXISTS="true"; # expect we have already installed db, but check to make sure
+if [ ! -d "${MYSQL_HOME}/mysql" ];
+then
+
+    if [ -z "${MYSQL_ROOT_PWD}" ] && [ -z "${MYSQL_USER_PWD}" ];
+    then
+        vecho "Either \$MYSQL_ROOT_PWD or \$MYSQL_USER_PWD is required to initialize database.";
+        vecho "Exiting.";
+        exit 1;
     fi;
+
+    DATABASE_ALREADY_EXISTS="false";
+    s6-setuidgid ${S6_USER:-mysql} \
+        /scripts/run.sh \
+            install-db \
+        ;
+fi
+
+if [ -z "${MYSQL_SKIP_BOOTSTRAP}" ] && [ "${DATABASE_ALREADY_EXISTS}" != "true" ];
+then # bootstrap freshly installed database with initial users
+
+    vecho "Starting temp-server for bootstrap.";
+    s6-setuidgid ${S6_USER:-mysql} \
+        /scripts/run.sh \
+            temp-server-start \
+        ;
+    s6-setuidgid ${S6_USER:-mysql} \
+        /scripts/run.sh \
+            wait-server-ready \
+        ;
+
+    loadBootstrapFile;
+
+    s6-setuidgid ${S6_USER:-mysql} \
+        /scripts/run.sh \
+            initdb \
+            ${MYSQL_PROCESS_ARGS[@]} \
+            ${MYSQL_DATABASE:+ --database "${MYSQL_DATABASE}"} \
+        ;
+
+    s6-setuidgid ${S6_USER:-mysql} \
+        /scripts/run.sh \
+            temp-server-stop \
+        ;
     vecho "Completed bootstrap.";
+fi;
+
+if [ -n "${MYSQL_UPGRADE_SYSTEM}" ] && [ "${DATABASE_ALREADY_EXISTS}" = "true" ]; # not needed for freshly setup db
+then
+    vecho "Starting temp-server for upgrade.";
+    s6-setuidgid ${S6_USER:-mysql} \
+        /scripts/run.sh \
+            temp-server-start \
+                --skip-grant-tables \
+                --loose-innodb_buffer_pool_dump_at_shutdown=0 \
+        ;
+    s6-setuidgid ${S6_USER:-mysql} \
+        /scripts/run.sh \
+            wait-server-ready \
+        ;
+
+    s6-setuidgid ${S6_USER:-mysql} \
+        /scripts/run.sh \
+            upgrade-db \
+        ;
+
+    s6-setuidgid ${S6_USER:-mysql} \
+        /scripts/run.sh \
+            temp-server-stop \
+        ;
+    vecho "Completed upgrade.";
 fi;
 
 vecho "Sleeping 1 sec before starting service...";

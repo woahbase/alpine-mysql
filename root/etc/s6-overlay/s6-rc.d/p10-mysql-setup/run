@@ -3,20 +3,35 @@ set -e
 
 vecho () { if [ "${S6_VERBOSITY:-1}" -gt 0 ]; then echo "[$0] $@"; fi; }
 
+MYSQL_HOME="${MYSQL_HOME:-/var/lib/mysql}"; # only created during initializing, not after
 MYSQL_BACKUPDIR="${MYSQL_BACKUPDIR:-/var/lib/mysql_backups}"; # only created during initializing, not after
+MYSQL_PORT="${MYSQL_PORT:-3306}";
+MYSQL_SOCKET_PATH="${MYSQL_SOCKET_PATH:-/run/mysqld/mysqld.sock}";
 
 vecho "Ensure configuration directories exist.";
 mkdir -p \
-    /var/lib/mysql \
-    ${MYSQL_BACKUPDIR} \
+    "${MYSQL_HOME}" \
+    "${MYSQL_BACKUPDIR}" \
     /run/mysqld \
+    $(dirname "${MYSQL_SOCKET_PATH}") \
     ;
+
+_subst () {
+    sed \
+    -e "s|S6_USER|${S6_USER}|g" \
+    -e "s|MYSQL_HOME|${MYSQL_HOME}|g" \
+    -e "s|MYSQL_PORT|${MYSQL_PORT}|g" \
+    -e "s|MYSQL_SERVERID|${MYSQL_SERVERID:-1}|g" \
+    -e "s|MYSQL_SOCKET_PATH|${MYSQL_SOCKET_PATH}|g" \
+    $1 > $2;
+}
 
 # ensure my.cnf exists
 if [ ! -f /etc/my.cnf ];
 then
-    vecho "Setting up default configurations at /etc/my.cnf.";
-    cp /defaults/my.cnf /etc/my.cnf;
+    vecho "Setting up default configurations at /etc/my.cnf";
+    # cp /defaults/my.cnf /etc/my.cnf;
+    _subst /defaults/my.cnf /etc/my.cnf;
 fi;
 
 # ensure my.cnf.d exists
@@ -33,15 +48,15 @@ fi;
 # fix permissions
 vecho "Fixing permissions.";
 chown -R \
-    ${S6_USER:-mysql}:${S6_USER:-mysql} \
+    ${S6_USER:-mysql}:${PGID:-1000} \
     /etc/my.cnf \
     /etc/my.cnf.d \
     /run/mysqld \
-    ${MYSQL_BACKUPDIR} \
+    $(dirname "${MYSQL_SOCKET_PATH}") \
     ;
 
-find /var/lib/mysql \
+find ${MYSQL_HOME} ${MYSQL_BACKUPDIR} \
     \! -user ${S6_USER:-mysql} -exec \
     chown --no-dereference \
-    ${S6_USER:-mysql}:${S6_USER:-mysql} \
+    ${S6_USER:-mysql}:${PGID:-1000} \
     '{}' +;

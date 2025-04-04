@@ -1,10 +1,14 @@
 #!/usr/bin/with-contenv bash
 set -e
 
-MYSQL_EXECUTABLE="${MYSQL_EXECUTABLE:-/usr/bin/mysqld}";
-MYSQL_ARGS="${MYSQL_ARGS:- --user=$S6_USER --console }";
+MYSQL_HOME="${MYSQL_HOME:-/var/lib/mysql}";
+MYSQL_EXECUTABLE="${MYSQL_EXECUTABLE:-/usr/bin/mariadbd}";
+MYSQLD_ARGS="${MYSQLD_ARGS:- --console }";
 
+cd "${MYSQL_HOME}" || exit 1;
+
+s6-setuidgid ${S6_USER:-mysql} \
 exec \
     ${MYSQL_EXECUTABLE} \
-    ${MYSQL_ARGS} \
+    ${MYSQLD_ARGS} \
     ;

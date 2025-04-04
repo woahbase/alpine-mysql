@@ -26,7 +26,7 @@ VERSION   ?= $(call get_svc_version)
 
 TESTCMD   := \
 	uname -a; \
-	mysql --version; \
+	mariadb --version; \
 	#
 # -- }}}
 
@@ -82,7 +82,9 @@ SCRIPTLOC  := /scripts/run.sh
 DBNAME     := test
 MOUNTFLAGS := \
 	# -v $(CURDIR)/data:/var/lib/mysql \
-	# -v $(CURDIR)/initdb.d:/etc/my.initdb.d \
+	# -v $(CURDIR)/backups:/var/lib/mysql_backups \
+	# -v $(CURDIR)/initdb.d:/initdb.d \
+	# -v $(CURDIR)/root/scripts:/scripts \
 	# -v /etc/hosts:/etc/hosts:ro \
 	# -v /etc/localtime:/etc/localtime:ro \
 	#
@@ -102,16 +104,28 @@ OTHERFLAGS := \
 	-m 512m \
 	-e PGID=$(PGID) \
 	-e PUID=$(PUID) \
-	# -e MYSQL_DATABASE=$(DBNAME) \
+	-e MYSQL_ROOT_PWD=insecurebydefault \
+	# \
 	# -e MYSQL_HOST=db.host.name \
 	# -e MYSQL_ROOT_PWD=insecurebydefault \
+	# -e MYSQL_DATABASE=$(DBNAME) \
 	# -e MYSQL_USER=mysql \
 	# -e MYSQL_USER_PWD=insecurebydefault \
+	# -e MYSQL_USER_GRANTS=ALL \
 	# -e MYSQL_HEALTHCHECK_USER=mysqlhc \
 	# -e MYSQL_HEALTHCHECK_USER_PWD=insecurebydefaulthc \
-	# -e MYSQL_KEEP_BOOTSTRAP_FILE=1 \
+	# -e MYSQL_HEALTHCHECK_USER_GRANTS=USAGE \
+	# -e MYSQL_REPLICA_HOST=master.my.service.local \
+	# -e MYSQL_REPLICA_USER=mysqlhc \
+	# -e MYSQL_REPLICA_USER_PWD=insecurebydefaulthc \
+	# -e MYSQL_SOCKET_USER_GRANTS=USAGE \
 	# -e MYSQL_SKIP_INITIALIZE=true \
 	# -e MYSQL_SKIP_BOOTSTRAP=true \
+	# -e MYSQL_KEEP_BOOTSTRAP_FILE=1 \
+	# -e MYSQL_UPGRADE_SYSTEM=true \
+	# -e MYSQL_HOME=/var/lib/mysql \
+	# -e MYSQL_SOCKET_PATH=/run/mysqld/mysqld.sock \
+	# -e MYSQLD_ARGS=" --console" \
 	# -e TZ=Asia/Kolkata \
 	#
 # all runtime flags combined here
@@ -171,14 +185,14 @@ test : ## run test command, i.e. TESTCMD
 	fi;
 	#
 
-initdb : ## initialize database
-	docker exec -it $(CNTNAME) $(SCRIPTLOC) initdb;
+# initdb : ## initialize database
+# 	docker exec -it -u $(PUID):$(PGID) $(CNTNAME) -u $(PUID):$(PGID) $(SCRIPTLOC) initdb;
 
 backup : ## backup a $(DBNAME) database
-	docker exec -it $(CNTNAME) $(SCRIPTLOC) backup $(DBNAME);
+	docker exec -it -u $(PUID):$(PGID) $(CNTNAME) $(SCRIPTLOC) backup $(DBNAME);
 
 restore : ## restore a $(DBNAME) database
-	docker exec -it $(CNTNAME) $(SCRIPTLOC) restore $(DBNAME);
+	docker exec -it -u $(PUID):$(PGID) $(CNTNAME) $(SCRIPTLOC) restore $(DBNAME);
 
 # -- }}}
 
@@ -249,7 +263,10 @@ push : BUILDDATETAG ?= $(subst $(ARCH),$(ARCH)$(if $(VERSION),_$(VERSION),)_$(BU
 push : ## push image
 	if [ -z "$(SKIP_$(ARCH))" ]; \
 	then \
-		docker push $(IMAGETAG); \
+		if [ -z "$(SKIP_LATESTTAG)" ]; \
+		then \
+			docker push $(IMAGETAG); \
+		fi; \
 		if [ -z "$(SKIP_VERSIONTAG)" ] && [ -n "$(VERSION)" ];\
 		then \
 			echo "Tagging $(VERSIONTAG)"; \
@@ -283,8 +300,11 @@ push_registry_% : ## push image to a different registry
 		then \
 			echo "Tagging $(REGDSTTAG)"; \
 			docker tag $(IMAGETAG) $(REGDSTTAG); \
+			if [ -z "$(SKIP_LATESTTAG)" ]; \
+			then \
+				docker push $(REGDSTTAG); \
+			fi; \
 		fi; \
-		docker push $(REGDSTTAG); \
 		if [ -z "$(SKIP_VERSIONTAG)" ] && [ -n "$(VERSION)" ];\
 		then \
 			echo "Tagging $(REGDSTVERSIONTAG)"; \
