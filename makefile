@@ -26,6 +26,7 @@ VERSION   ?= $(call get_svc_version)
 
 TESTCMD   := \
 	uname -a; \
+	mariadbd --version; \
 	mariadb --version; \
 	#
 # -- }}}
@@ -456,10 +457,10 @@ endef
 # gets installed version string from built image
 define get_svc_version
 $(shell docker run --rm --pull=never \
-	--entrypoint mysql \
+	--entrypoint mariadbd \
 	$(IMAGETAG) \
 	--version \
 	2>/dev/null \
-	| awk '{ print $$5  }' | awk -F\- '{ print $$1 }')
+	| awk '{ print $$3  }' | awk -F\- '{ print $$1 }')
 endef
 # -- }}}
