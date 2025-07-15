@@ -4,6 +4,8 @@ ARG IMAGEBASE=frommakefile
 #
 FROM ${IMAGEBASE}
 #
+ARG TARGETPLATFORM
+#
 ENV \
     MYSQL_BACKUPDIR=/var/lib/mysql_backups \
     MYSQL_HOME=/var/lib/mysql \
@@ -33,8 +35,13 @@ RUN set -xe \
         mariadb-backup \
         mariadb-client \
         mariadb-mytop \
-        mariadb-plugin-rocksdb \
         mariadb-server-utils \
+        # no RocksDB plugin package available for these two
+        $(if [ "${TARGETPLATFORM}" == "linux/386" ] \
+          || [ "${TARGETPLATFORM}" == "linux/s390x" ]; \
+          then echo ""; \
+          else echo "mariadb-plugin-rocksdb"; \
+        fi) \
 #
     && mkdir -p /defaults \
     && mv /etc/my.cnf /defaults/my.cnf.default \
