@@ -44,7 +44,7 @@ RUN set -xe \
 #
 COPY root/ /
 #
-VOLUME  ["${MYSQL_HOME}", "/etc/my.cnf.d", "${MYSQL_BACKUPDIR}"]
+VOLUME  ["${MYSQL_HOME}", "${MYSQL_BACKUPDIR}"]
 #
 EXPOSE ${MYSQL_PORT} 33060
 #
@@ -54,7 +54,6 @@ HEALTHCHECK \
     --start-period=5m \
     --timeout=10s \
     CMD \
-        s6-setuidgid ${S6_USER:-mysql} \
         /scripts/run.sh healthcheck \
     || exit 1
 #

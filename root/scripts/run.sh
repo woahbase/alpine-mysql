@@ -10,7 +10,8 @@ MYSQL_BACKUPDIR="${MYSQL_BACKUPDIR:-/var/lib/mysql_backups}"; # for backups
 MYSQL_INITDIR=${MYSQL_INITDIR:-/initdb.d}; # for initializer files
 MYSQL_SOCKET_PATH="${MYSQL_SOCKET_PATH:-/run/mysqld/mysqld.sock}";
 
-if [ "X${EUID}" = "X0" ]; then vecho "must be run as a non-root mysql user."; exit 1; fi;
+# must be run as a non-root mysql user
+if [ "X${EUID}" = "X0" ]; then s6-setuidgid ${PUID:-1000}:${PGID:-1000} $0 $@; exit $?; fi;
 
 CMD="$1"; # required to select task to run
 
@@ -129,7 +130,7 @@ then
             --rpm \
             --skip-log-bin \
             --skip-test-db \
-            --user="${S6_USER:-mysql}" \
+            $(if [ "X${EUID}" = "X0" ]; then echo "--user=${S6_USER:-mysql}"; fi;) \
             ${MYSQL_INSTALLDB_ARGS[@]} \
             ${MYSQLD_ARGS[@]} \
             ${@:2} \

@@ -3,6 +3,7 @@ set -eo pipefail
 shopt -s nullglob
 
 vecho () { if [ "${S6_VERBOSITY:-1}" -gt 0 ]; then echo "[$0] $@"; fi; }
+usercmd () { if [ "X${EUID}" != "X0" ]; then ${1} "${@:2}"; else s6-setuidgid ${PUID:-1000}:${PGID:-1000} ${1} "${@:2}"; fi; }
 
 if [ -n "${MYSQL_SKIP_INITIALIZE}" ]; then exit 0; fi;
 # else init database only if system db does not exist
@@ -55,7 +56,7 @@ loadBootstrapFile () {
         if [ -z "${MYSQL_INITDB_SKIP_TZINFO}" ];
         then # load tzinfo
             # sed is for https://bugs.mysql.com/bug.php?id=20545
-            s6-setuidgid ${S6_USER:-mysql} \
+            usercmd \
                 mariadb-tzinfo-to-sql \
                     --skip-write-binlog \
                     /usr/share/zoneinfo \
@@ -187,7 +188,7 @@ EOSQL
     fi;
 
     vecho "Loading bootstrap file."; # without password because we're only setting it up now
-    s6-setuidgid ${S6_USER:-mysql} \
+    usercmd \
         mariadb \
             ${MYSQL_PROCESS_ARGS} \
             --binary-mode \
@@ -214,64 +215,38 @@ then
     fi;
 
     DATABASE_ALREADY_EXISTS="false";
-    s6-setuidgid ${S6_USER:-mysql} \
-        /scripts/run.sh \
-            install-db \
-        ;
+    usercmd /scripts/run.sh install-db;
 fi
 
 if [ -z "${MYSQL_SKIP_BOOTSTRAP}" ] && [ "${DATABASE_ALREADY_EXISTS}" != "true" ];
 then # bootstrap freshly installed database with initial users
 
     vecho "Starting temp-server for bootstrap.";
-    s6-setuidgid ${S6_USER:-mysql} \
-        /scripts/run.sh \
-            temp-server-start \
-        ;
-    s6-setuidgid ${S6_USER:-mysql} \
-        /scripts/run.sh \
-            wait-server-ready \
-        ;
-
+    usercmd /scripts/run.sh temp-server-start;
+    usercmd /scripts/run.sh wait-server-ready;
     loadBootstrapFile;
-
-    s6-setuidgid ${S6_USER:-mysql} \
+    usercmd \
         /scripts/run.sh \
             initdb \
             ${MYSQL_PROCESS_ARGS[@]} \
             ${MYSQL_DATABASE:+ --database "${MYSQL_DATABASE}"} \
         ;
-
-    s6-setuidgid ${S6_USER:-mysql} \
-        /scripts/run.sh \
-            temp-server-stop \
-        ;
+    usercmd /scripts/run.sh temp-server-stop;
     vecho "Completed bootstrap.";
 fi;
 
 if [ -n "${MYSQL_UPGRADE_SYSTEM}" ] && [ "${DATABASE_ALREADY_EXISTS}" = "true" ]; # not needed for freshly setup db
 then
     vecho "Starting temp-server for upgrade.";
-    s6-setuidgid ${S6_USER:-mysql} \
+    usercmd \
         /scripts/run.sh \
             temp-server-start \
                 --skip-grant-tables \
                 --loose-innodb_buffer_pool_dump_at_shutdown=0 \
         ;
-    s6-setuidgid ${S6_USER:-mysql} \
-        /scripts/run.sh \
-            wait-server-ready \
-        ;
-
-    s6-setuidgid ${S6_USER:-mysql} \
-        /scripts/run.sh \
-            upgrade-db \
-        ;
-
-    s6-setuidgid ${S6_USER:-mysql} \
-        /scripts/run.sh \
-            temp-server-stop \
-        ;
+    usercmd /scripts/run.sh wait-server-ready;
+    usercmd /scripts/run.sh upgrade-db;
+    usercmd /scripts/run.sh temp-server-stop;
     vecho "Completed upgrade.";
 fi;
 

@@ -1,13 +1,15 @@
 #!/usr/bin/with-contenv bash
 set -e
 
+usercmd () { if [ "X${EUID}" != "X0" ]; then ${1} "${@:2}"; else s6-setuidgid ${PUID:-1000}:${PGID:-1000} ${1} "${@:2}"; fi; }
+
 MYSQL_HOME="${MYSQL_HOME:-/var/lib/mysql}";
 MYSQL_EXECUTABLE="${MYSQL_EXECUTABLE:-/usr/bin/mariadbd}";
-MYSQLD_ARGS="${MYSQLD_ARGS:- --console }";
+MYSQLD_ARGS="${MYSQLD_ARGS:- --console}";
 
 cd "${MYSQL_HOME}" || exit 1;
 
-s6-setuidgid ${S6_USER:-mysql} \
+usercmd \
 exec \
     ${MYSQL_EXECUTABLE} \
     ${MYSQLD_ARGS} \

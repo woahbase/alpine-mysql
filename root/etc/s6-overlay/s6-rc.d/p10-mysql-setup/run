@@ -3,6 +3,8 @@ set -e
 
 vecho () { if [ "${S6_VERBOSITY:-1}" -gt 0 ]; then echo "[$0] $@"; fi; }
 
+MYSQL_CONF="${MYSQL_CONF:-/etc/my.cnf}";
+MYSQL_CONFD="${MYSQL_CONFD:-$(dirname $MYSQL_CONF)/my.cnf.d}";
 MYSQL_HOME="${MYSQL_HOME:-/var/lib/mysql}"; # only created during initializing, not after
 MYSQL_BACKUPDIR="${MYSQL_BACKUPDIR:-/var/lib/mysql_backups}"; # only created during initializing, not after
 MYSQL_PORT="${MYSQL_PORT:-3306}";
@@ -12,6 +14,7 @@ vecho "Ensure configuration directories exist.";
 mkdir -p \
     "${MYSQL_HOME}" \
     "${MYSQL_BACKUPDIR}" \
+    "$(dirname $MYSQL_CONF)" \
     /run/mysqld \
     $(dirname "${MYSQL_SOCKET_PATH}") \
     ;
@@ -19,6 +22,7 @@ mkdir -p \
 _subst () {
     sed \
     -e "s|S6_USER|${S6_USER}|g" \
+    -e "s|MYSQL_CONFD|${MYSQL_CONFD}|g" \
     -e "s|MYSQL_HOME|${MYSQL_HOME}|g" \
     -e "s|MYSQL_PORT|${MYSQL_PORT}|g" \
     -e "s|MYSQL_SERVERID|${MYSQL_SERVERID:-1}|g" \
@@ -27,36 +31,44 @@ _subst () {
 }
 
 # ensure my.cnf exists
-if [ ! -f /etc/my.cnf ];
+if [ ! -f "${MYSQL_CONF}" ];
 then
-    vecho "Setting up default configurations at /etc/my.cnf";
+    vecho "Setting up default configurations at ${MYSQL_CONF}";
     # cp /defaults/my.cnf /etc/my.cnf;
-    _subst /defaults/my.cnf /etc/my.cnf;
+    _subst /defaults/my.cnf "${MYSQL_CONF}";
 fi;
 
 # ensure my.cnf.d exists
-if [ ! -d "/etc/my.cnf.d" ] \
+if [ ! -d "${MYSQL_CONFD}" ] \
 && [ -z "${MYSQL_SKIP_MYCNFD}" ]; # set to true if all you settings are in my.cnf
 then
-    vecho "Setting up default config-snippet dir at /etc/my.cnf.d";
-    cp -r /defaults/my.cnf.d /etc/; # drop default snippets
+    vecho "Setting up default config-snippet dir at ${MYSQL_CONFD}";
+    mkdir -p "${MYSQL_CONFD}";
+    cp -r /defaults/my.cnf.d/* "${MYSQL_CONFD}"; # drop default snippets
 else
-    vecho "Ensure default config-snippet dir at /etc/my.cnf.d exists.";
-    mkdir -p /etc/my.cnf.d; # only make sure dir exists
+    vecho "Ensure default config-snippet dir at ${MYSQL_CONFD} exists.";
+    mkdir -p "${MYSQL_CONFD}"; # only make sure dir exists
 fi;
 
 # fix permissions
-vecho "Fixing permissions.";
-chown -R \
-    ${S6_USER:-mysql}:${PGID:-1000} \
-    /etc/my.cnf \
-    /etc/my.cnf.d \
-    /run/mysqld \
-    $(dirname "${MYSQL_SOCKET_PATH}") \
-    ;
+if [ -z "${MYSQL_SKIP_PERMFIX}" ] \
+&& [ "X${EUID}" == "X0" ]; # requires root
+then
+    vecho "Fixing permissions.";
+    chown -R \
+        ${S6_USER:-mysql}:${PGID:-1000} \
+        "${MYSQL_CONF}" \
+        "${MYSQL_CONFD}" \
+        /run/mysqld \
+        $(dirname "${MYSQL_SOCKET_PATH}") \
+        ;
 
-find ${MYSQL_HOME} ${MYSQL_BACKUPDIR} \
-    \! -user ${S6_USER:-mysql} -exec \
-    chown --no-dereference \
-    ${S6_USER:-mysql}:${PGID:-1000} \
-    '{}' +;
+    find \
+        "${MYSQL_HOME}" \
+        "${MYSQL_BACKUPDIR}" \
+        \! -user ${S6_USER:-mysql} -exec \
+        chown --no-dereference \
+        ${S6_USER:-mysql}:${PGID:-1000} \
+        '{}' +;
+fi;
+
